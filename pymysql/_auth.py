@@ -15,12 +15,17 @@ try:
 except ImportError:
     _have_cryptography = False
 
+try:
+    import ed25519
+    _have_ed25519 = True
+except ImportError:
+    _have_ed25519 = False
+
 from functools import partial
 import hashlib
 import io
 import struct
 import warnings
-
 
 DEBUG = False
 SCRAMBLE_LENGTH = 20
@@ -112,6 +117,22 @@ def _hash_password_323(password):
     r1 = nr & ((1 << 31) - 1)  # kill sign bits
     r2 = nr2 & ((1 << 31) - 1)
     return struct.pack(">LL", r1, r2)
+
+
+# MariaDB's client_ed25519-plugin
+# https://mariadb.com/kb/en/library/connection/#client_ed25519-plugin
+
+
+def ed25519_password(password, scramble):
+    """Sign a random scramble with elliptic curve Ed25519.
+
+    Secret and public key are derived from password.
+    """
+    if not _have_ed25519:
+        raise RuntimeError("'ed25519' package is required for ed25519_password auth method")
+    pub_key = ed25519.publickey(password)
+    signed_data = ed25519.signature(scramble, password, pub_key)
+    return signed_data
 
 
 # sha256_password
