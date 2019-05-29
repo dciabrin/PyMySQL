@@ -19,6 +19,7 @@ setup(
     packages=find_packages(exclude=['tests*', 'pymysql.tests*']),
     extras_require={
         "rsa": ["cryptography"],
+        "ed25519": ["PyNaCl"],
     },
     classifiers=[
         'Development Status :: 5 - Production/Stable',

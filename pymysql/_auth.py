@@ -114,6 +114,98 @@ def _hash_password_323(password):
     return struct.pack(">LL", r1, r2)
 
 
+# MariaDB's client_ed25519-plugin
+# https://mariadb.com/kb/en/library/connection/#client_ed25519-plugin
+
+_nacl_bindings = False
+
+
+def _init_nacl():
+    global _nacl_bindings
+    try:
+        from nacl import bindings
+        _nacl_bindings = bindings
+    except ImportError:
+        raise RuntimeError("'pynacl' package is required for ed25519_password auth method")
+
+
+def _list_to_integer(l):
+    acc = 0
+    for i in l[::-1]:
+        acc = (acc << 8) + i
+    return acc
+
+
+def _scalar_to_integer(s32):
+    return _list_to_integer(struct.unpack('32B', s32))
+
+
+def _scalar_from_integer(i):
+    lst = []
+    for x in range(32):
+        lst.append(int(i & 0xff))
+        i = i >> 8
+    return struct.pack('32B', *lst)
+
+
+def _scalar_clamp(s32):
+    ba = bytearray(s32)
+    ba0 = bytes(bytearray([ba[0] & 248]))
+    ba31 = bytes(bytearray([(ba[31] & 127) | 64]))
+    return ba0 + bytes(s32[1:31]) + ba31
+
+
+def ed25519_password(password, scramble):
+    """Sign a random scramble with elliptic curve Ed25519.
+
+    Secret and public key are derived from password.
+    """
+    # variable names based on rfc8032 section-5.1.6
+    #
+    if not _nacl_bindings:
+        _init_nacl()
+
+    # h = SHA512(password)
+    h = hashlib.sha512(password).digest()
+
+    # s = prune(first_half(h))
+    s = _scalar_clamp(h[:32])
+
+    # r = SHA512(second_half(h) || M)
+    r = hashlib.sha512(h[32:] + scramble).digest()
+
+    # R = encoded point [r]B
+    r = _nacl_bindings.crypto_core_ed25519_scalar_reduce(r)
+    R = _nacl_bindings.crypto_scalarmult_ed25519_base_noclamp(r)
+
+    # A = encoded point [s]B
+    A = _nacl_bindings.crypto_scalarmult_ed25519_base_noclamp(s)
+
+    # k = SHA512(R || A || M)
+    k = hashlib.sha512(R + A + scramble).digest()
+
+    # S = (k * s + r) mod L
+    # libsodium 1.0.17 doesn't have scalar_mul, so implement
+    # the modular computation with python integers modulo L,
+    # the order of the main subgroup
+    # (L = 2^252+27742317777372353535851937790883648493)
+    L = _list_to_integer([0xed, 0xd3, 0xf5, 0x5c,
+                          0x1a, 0x63, 0x12, 0x58,
+                          0xd6, 0x9c, 0xf7, 0xa2,
+                          0xde, 0xf9, 0xde, 0x14,
+                          0x00, 0x00, 0x00, 0x00,
+                          0x00, 0x00, 0x00, 0x00,
+                          0x00, 0x00, 0x00, 0x00,
+                          0x00, 0x00, 0x00, 0x10])
+    k = _nacl_bindings.crypto_core_ed25519_scalar_reduce(k)
+    ks = _scalar_to_integer(k) * _scalar_to_integer(s)
+    S = (ks + _scalar_to_integer(r)) % L
+    scalar_S = _scalar_from_integer(S)
+
+    # signature = R || S
+    return R + scalar_S
+
+
 # sha256_password
 
 
